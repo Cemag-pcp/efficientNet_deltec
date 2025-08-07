@@ -3,22 +3,30 @@ import cv2
 import csv
 import torch
 import time
+from pathlib import Path
+
 from ultralytics import YOLO
 from torchvision import transforms, models
 from PIL import Image
 from datetime import datetime, timedelta
+from collections import deque
 from api_apontamento import finalizar_cambao
-            
+     
+# base do projeto (onde está este script)
+BASE_DIR = Path(__file__).parent
+
+# monta caminho relativo até o best.pt
+YOLO_WEIGHTS = BASE_DIR / 'results' / 'placa_detector' / 'weights' / 'best.pt'
+
 # — CONFIGURAÇÕES —
-YOLO_WEIGHTS = r'C:\Users\TI DEV\effn_deltec\deltec\results\placa_detector\weights\best.pt'
+YOLO_WEIGHTS = str(YOLO_WEIGHTS)
 EFF_WEIGHTS  = 'eff3vs8.pth'
 DEVICE       = 'cuda' if torch.cuda.is_available() else 'cpu'
 IMG_SIZE     = 640
-CONF_THRESH  = 0.6
+CONF_THRESH  = 0.75
 
 # URL da sua câmera IP (RTSP)
 VIDEO_PATH = 'rtsp://admin:cem@2022@192.168.3.208:554/cam/realmonitor?channel=1&subtype=0'
-# VIDEO_PATH = r'videos_teste/7_0708.mp4'
 
 num_classes = 8
 classes = [str(i) for i in range(1, 9)]
@@ -27,16 +35,21 @@ classes = [str(i) for i in range(1, 9)]
 ROI_X1, ROI_Y1 = 600, 250
 ROI_X2, ROI_Y2 = 900, 400
 
-# Cooldown de 30 minutos
 ALERT_COOLDOWN = timedelta(minutes=30)
 last_alert = {c: datetime.min for c in classes}
+ALERT_CSV = 'alerts.csv'
+
+# --- Parâmetros de suavização ---
+FRAME_THRESHOLD = 3      # mesmo dígito em 3 frames seguidos
+recent_preds    = deque(maxlen=FRAME_THRESHOLD)
+stable_digit    = None
+last_alert_time = datetime.min
+# ----------------------------------
 
 # Caminho do CSV de alertas
-ALERT_CSV = 'alerts.csv'
 if not os.path.exists(ALERT_CSV):
     with open(ALERT_CSV, 'w', newline='') as f:
-        writer = csv.writer(f)
-        writer.writerow(['timestamp', 'digit', 'yolo_conf', 'clf_conf'])
+        csv.writer(f).writerow(['timestamp','digit','yolo_conf','clf_conf'])
 
 # Carrega modelos
 yolo = YOLO(YOLO_WEIGHTS)
@@ -67,78 +80,106 @@ def conectar_camera(url, tentativas=100, delay=5):
     return None
 
 def realtime_infer():
-    # abre o stream da câmera
+    global stable_digit, last_alert_time
+
     cap = conectar_camera(VIDEO_PATH)
     if cap is None:
+        print("Não foi possível conectar à câmera.")
         return
 
-    window = 'Inferência - Câmera IP'
+    # 1) Cria a janela antes do loop
+    window = 'Detecções'
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
 
     while True:
+
         ret, frame = cap.read()
         if not ret:
-            print("? Falha ao ler frame. Tentando reconectar...")
             cap.release()
             cap = conectar_camera(VIDEO_PATH)
-            if cap is None:
-                break
+            if cap is None: break
             continue
 
-        # desenha ROI
-        cv2.rectangle(frame, (ROI_X1, ROI_Y1), (ROI_X2, ROI_Y2), (255,0,0), 2)
+        # inferência YOLO
+        results = yolo(frame, imgsz=IMG_SIZE, conf=CONF_THRESH,
+                       verbose=False, show=False)[0]
+        boxes     = results.boxes.xyxy.cpu().numpy()
+        yolo_confs= results.boxes.conf.cpu().numpy()
 
-        # inferência YOLO no frame inteiro
-        results = yolo(frame, imgsz=IMG_SIZE, conf=CONF_THRESH, verbose=False, show=False)[0]
-        boxes = results.boxes.xyxy.cpu().numpy()
-        yolo_confs = results.boxes.conf.cpu().numpy()
+        # 1) Desenha o ROI definido
+        cv2.rectangle(
+            frame,
+            (ROI_X1, ROI_Y1),
+            (ROI_X2, ROI_Y2),
+            (255, 0, 0),   # cor azul
+            2              # espessura da borda
+        )
 
+        # para cada caixa dentro da ROI
         for (x1,y1,x2,y2), yolo_conf in zip(boxes, yolo_confs):
             x1,y1,x2,y2 = map(int, (x1,y1,x2,y2))
-            # só dentro da ROI
-            if x1 < ROI_X1 or y1 < ROI_Y1 or x2 > ROI_X2 or y2 > ROI_Y2:
+            if x1<ROI_X1 or y1<ROI_Y1 or x2>ROI_X2 or y2>ROI_Y2:
                 continue
 
+            # prepara crop e classifica
             crop = frame[y1:y2, x1:x2]
-            if crop.size == 0:
-                continue
+            if crop.size == 0: continue
 
             pil = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
             inp = tfm(pil).unsqueeze(0).to(DEVICE)
-
             with torch.no_grad():
                 logits = clf(inp)
-                pred = logits.argmax(dim=1).item()
-                clf_conf = torch.softmax(logits, dim=1)[0, pred].item()
+                pred   = logits.argmax(dim=1).item()
+                clf_conf = torch.softmax(logits,1)[0,pred].item()
 
-            digit = classes[pred]
+            pred_digit = classes[pred]
+            # 1) acumula no deque
+            recent_preds.append(pred_digit)
+
+            # 2) verifica se o deque encheu e todos são iguais
+            if len(recent_preds)==FRAME_THRESHOLD and len(set(recent_preds))==1:
+                candidate = recent_preds[0]
+            else:
+                candidate = None
+
+            # 3) só dispara quando mudar para um novo dígito estável
             now = datetime.now()
+            if candidate and candidate != stable_digit:
+                # checa cooldown
+                if now - last_alert_time >= ALERT_COOLDOWN:
+                    stable_digit    = candidate
+                    last_alert_time = now
 
-            # checa cooldown e registra alerta
-            if now - last_alert[digit] >= ALERT_COOLDOWN:
-                last_alert[digit] = now
-                with open(ALERT_CSV, 'a', newline='') as f:
-                    writer = csv.writer(f)
-                    writer.writerow([
-                        now.strftime('%Y-%m-%d %H:%M:%S'),
-                        digit,
-                        f'{yolo_conf:.4f}',
-                        f'{clf_conf:.4f}'
-                    ])
-                print(f"?? Alerta: dígito {digit} com YOLO {yolo_conf:.2%} e "
-                      f"classif. {clf_conf:.2%} registrado em {now.strftime('%H:%M:%S')}")
-                
-                # chamar a api de apontamento
-                finalizar_cambao(digit)
-                
-            # desenha resultado
-            cv2.rectangle(frame, (x1,y1), (x2,y2), (0,255,0), 2)
-            label_txt = f'{digit} ({int(yolo_conf*100)}%)'
-            cv2.putText(frame, label_txt, (x1,y1-10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
+                    # registra CSV
+                    with open(ALERT_CSV, 'a', newline='') as f:
+                        csv.writer(f).writerow([
+                            now.strftime('%Y-%m-%d %H:%M:%S'),
+                            stable_digit,
+                            f'{yolo_conf:.4f}',
+                            f'{clf_conf:.4f}'
+                        ])
 
-        # cv2.imshow(window, frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+                    print(f"✅ Alerta: dígito {stable_digit} | "
+                          f"YOLO {yolo_conf:.0%}, clf {clf_conf:.0%} em {now:%H:%M:%S}")
+
+                    # chama API
+                    # finalizar_cambao(stable_digit)
+            
+            cv2.imshow('Detecções', frame)
+
+            # desenha no frame o dígito estável, não o ruído momentâneo
+            if stable_digit:
+                cv2.rectangle(frame,(x1,y1),(x2,y2),(0,255,0),2)
+                cv2.putText(frame,
+                            f'{stable_digit} ({int(yolo_conf*100)}%)',
+                            (x1,y1-10), cv2.FONT_HERSHEY_SIMPLEX,
+                            1,(0,255,0),2)
+        
+        # 2) Exibe o frame inteiro **depois** de desenhar todas as deteções
+        cv2.imshow(window, frame)
+        
+        # exibe (ou salta se não quiser janela)
+        if cv2.waitKey(1)&0xFF==ord('q'):
             break
 
     cap.release()
