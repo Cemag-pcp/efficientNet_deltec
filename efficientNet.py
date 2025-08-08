@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torchvision import transforms, datasets, models
 from torch.utils.data import DataLoader
+from sklearn.metrics import classification_report, accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 
 def train():
     # --- configurações ---
@@ -61,23 +62,63 @@ def train():
             optimizer.step()
             running_loss += loss.item() * imgs.size(0)
         return running_loss / len(train_ds)
-
+    
     def validate():
         model.eval()
-        correct = 0
+        all_preds, all_labels = [], []
+
         with torch.no_grad():
             for imgs, labels in valid_ld:
                 imgs, labels = imgs.to(device), labels.to(device)
                 outputs = model(imgs)
-                preds = outputs.argmax(dim=1)
-                correct += (preds == labels).sum().item()
-        return correct / len(valid_ds)
+                preds   = outputs.argmax(dim=1)
+                all_preds .extend(preds.cpu().tolist())
+                all_labels.extend(labels.cpu().tolist())
+
+        # acurácia geral
+        overall_acc = accuracy_score(all_labels, all_preds)
+
+        # relatório em dicionário
+        report_dict = classification_report(
+            all_labels,
+            all_preds,
+            target_names=train_ds.classes,
+            output_dict=True,
+            zero_division=0
+        )
+
+        # Matriz de confusão (opcional, para calcular métricas extras)
+        cm = confusion_matrix(all_labels, all_preds)
+
+        # Exibe por classe
+        print(f"\nOverall Accuracy: {overall_acc:.4f}\n")
+        for cls in train_ds.classes:
+            cls_rep = report_dict[cls]
+            prec = cls_rep['precision']
+            rec  = cls_rep['recall']
+            f1   = cls_rep['f1-score']
+            sup  = cls_rep['support']
+            # calcula “class accuracy” (tp+tn)/(total), se quiser:
+            idx = train_ds.classes.index(cls)
+            tp = cm[idx, idx]
+            tn = cm.sum() - (cm[idx, :].sum() + cm[:, idx].sum() - tp)
+            cls_acc = (tp + tn) / cm.sum()
+
+            print(f"Classe {cls}:")
+            print(f"  → Precision: {prec:.4f}")
+            print(f"  → Recall:    {rec:.4f}")
+            print(f"  → F1-score:  {f1:.4f}")
+            print(f"  → Support:   {int(sup)} amostras")
+            print(f"  → Class Acc: {cls_acc:.4f}\n")
+
+        return overall_acc, report_dict
 
     # Loop de treino
     for epoch in range(1, num_epochs+1):
         train_loss = train_epoch()
-        val_acc    = validate()
+        val_acc, cls_report = validate()
         print(f'Epoch {epoch}/{num_epochs} — Loss: {train_loss:.4f} — Val Acc: {val_acc:.4f}')
+        print('Classification Report:\n', cls_report)
         if val_acc > best_acc:
             best_acc = val_acc
             torch.save(model.state_dict(), model_path)

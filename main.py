@@ -1,9 +1,13 @@
 import os
 import cv2
 from ultralytics import YOLO
+from pathlib import Path
+
+# base do projeto (onde está este script)
+BASE_DIR = Path(__file__).parent
 
 # — CONFIGURAÇÕES —
-YOLO_WEIGHTS = r'C:\Users\Luan\workspace\visao_comp\results\placa_detector\weights\best.pt'
+YOLO_WEIGHTS = BASE_DIR / 'results' / 'placa_detector' / 'weights' / 'best.pt'
 SOURCE_ROOTS = {
     'dia':   r'videos\dia',
     'noite': r'videos\noite'
