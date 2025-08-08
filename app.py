@@ -24,6 +24,7 @@ EFF_WEIGHTS  = 'eff3vs8.pth'
 DEVICE       = 'cuda' if torch.cuda.is_available() else 'cpu'
 IMG_SIZE     = 640
 CONF_THRESH  = 0.75
+CLF_THRESH  = 0.75
 
 # URL da sua câmera IP (RTSP)
 VIDEO_PATH = 'rtsp://admin:cem@2022@192.168.3.208:554/cam/realmonitor?channel=1&subtype=0'
@@ -143,29 +144,31 @@ def realtime_infer():
                 candidate = None
 
             # 3) só dispara quando mudar para um novo dígito estável
+            # 3) Só dispara quando mudar para um novo dígito estável
             now = datetime.now()
             if candidate and candidate != stable_digit:
-                # checa cooldown
-                if now - last_alert_time >= ALERT_COOLDOWN:
-                    stable_digit    = candidate
-                    last_alert_time = now
+                # 3.1) Filtra pelas confianças
+                if yolo_conf >= CONF_THRESH and clf_conf >= CLF_THRESH:
+                    # 3.2) Verifica o cooldown
+                    if now - last_alert_time >= ALERT_COOLDOWN:
+                        stable_digit    = candidate
+                        last_alert_time = now
 
-                    # registra CSV
-                    with open(ALERT_CSV, 'a', newline='') as f:
-                        csv.writer(f).writerow([
-                            now.strftime('%Y-%m-%d %H:%M:%S'),
-                            stable_digit,
-                            f'{yolo_conf:.4f}',
-                            f'{clf_conf:.4f}'
-                        ])
+                        # registra CSV e chama API
+                        with open(ALERT_CSV, 'a', newline='') as f:
+                            csv.writer(f).writerow([
+                                now.strftime('%Y-%m-%d %H:%M:%S'),
+                                stable_digit,
+                                f'{yolo_conf:.4f}',
+                                f'{clf_conf:.4f}'
+                            ])
+                        print(f"✅ Alerta: dígito {stable_digit} | "
+                            f"YOLO {yolo_conf:.0%}, clf {clf_conf:.0%} em {now:%H:%M:%S}")
 
-                    print(f"✅ Alerta: dígito {stable_digit} | "
-                          f"YOLO {yolo_conf:.0%}, clf {clf_conf:.0%} em {now:%H:%M:%S}")
-
-                    # chama API
-                    # finalizar_cambao(stable_digit)
+                        # chama API
+                        finalizar_cambao(stable_digit)
             
-            cv2.imshow('Detecções', frame)
+            # cv2.imshow('Detecções', frame)
 
             # desenha no frame o dígito estável, não o ruído momentâneo
             if stable_digit:
