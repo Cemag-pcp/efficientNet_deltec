@@ -148,7 +148,6 @@ def realtime_infer():
                 candidate = None
 
             # 3) só dispara quando mudar para um novo dígito estável
-            # 3) Só dispara quando mudar para um novo dígito estável
             now = datetime.now()
             if candidate and candidate != stable_digit:
                 # 3.1) Filtra pelas confianças
@@ -183,7 +182,7 @@ def realtime_infer():
                             1,(0,255,0),2)
         
         # 2) Exibe o frame inteiro **depois** de desenhar todas as deteções
-        cv2.imshow(window, frame)
+        # cv2.imshow(window, frame)
         
         # exibe (ou salta se não quiser janela)
         if cv2.waitKey(1)&0xFF==ord('q'):
