@@ -1,0 +1,5 @@
+opencv-python==4.8.1.78
+torch==2.8.0
+torchvision==0.23.0
+ultralytics==8.3.175
+Pillow==9.3.0
