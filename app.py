@@ -89,8 +89,8 @@ def realtime_infer():
         return
 
     # 1) Cria a janela antes do loop
-    window = 'Detecções'
-    cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+    # window = 'Detecções'
+    # cv2.namedWindow(window, cv2.WINDOW_NORMAL)
 
     while True:
         
