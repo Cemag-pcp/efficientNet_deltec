@@ -93,7 +93,11 @@ def realtime_infer():
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
 
     while True:
-
+        
+        grabbed = cap.grab()
+        if not grabbed:
+            break
+        
         ret, frame = cap.read()
         if not ret:
             cap.release()
