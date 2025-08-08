@@ -170,7 +170,7 @@ def realtime_infer():
                             f"YOLO {yolo_conf:.0%}, clf {clf_conf:.0%} em {now:%H:%M:%S}")
 
                         # chama API
-                        # finalizar_cambao(stable_digit)
+                        finalizar_cambao(stable_digit)
             
             # cv2.imshow('Detecções', frame)
 
