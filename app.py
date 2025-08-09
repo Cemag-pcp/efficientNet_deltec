@@ -27,7 +27,8 @@ CONF_THRESH  = 0.75
 CLF_THRESH  = 0.75
 
 # URL da sua câmera IP (RTSP)
-VIDEO_PATH = 'rtsp://admin:cem@2022@192.168.3.208:554/cam/realmonitor?channel=1&subtype=0'
+# VIDEO_PATH = 'rtsp://admin:cem@2022@192.168.3.208:554/cam/realmonitor?channel=1&subtype=0'
+VIDEO_PATH = '5noite.mp4'
 
 num_classes = 8
 classes = [str(i) for i in range(1, 9)]
@@ -89,8 +90,10 @@ def realtime_infer():
         return
 
     # 1) Cria a janela antes do loop
-    # window = 'Detecções'
+    window = 'Detecções'
     # cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+
+    prev_time = time.time()  # timestamp do frame anterior
 
     while True:
         
@@ -104,6 +107,18 @@ def realtime_infer():
             cap = conectar_camera(VIDEO_PATH)
             if cap is None: break
             continue
+
+        # cálculo do FPS
+        now = time.time()
+        fps = 1.0 / (now - prev_time)
+        prev_time = now
+
+        # desenha o FPS no canto da tela
+        cv2.putText(frame,
+                    f'FPS: {fps:.1f}',
+                    (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1, (0,255,0), 2)
 
         # inferência YOLO
         results = yolo(frame, imgsz=IMG_SIZE, conf=CONF_THRESH,
@@ -169,7 +184,7 @@ def realtime_infer():
                             f"YOLO {yolo_conf:.0%}, clf {clf_conf:.0%} em {now:%H:%M:%S}")
 
                         # chama API
-                        finalizar_cambao(stable_digit)
+                        # finalizar_cambao(stable_digit)
             
             # cv2.imshow('Detecções', frame)
 
@@ -182,7 +197,7 @@ def realtime_infer():
                             1,(0,255,0),2)
         
         # 2) Exibe o frame inteiro **depois** de desenhar todas as deteções
-        # cv2.imshow(window, frame)
+        cv2.imshow(window, frame)
         
         # exibe (ou salta se não quiser janela)
         if cv2.waitKey(1)&0xFF==ord('q'):
