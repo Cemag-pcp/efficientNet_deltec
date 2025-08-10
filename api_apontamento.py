@@ -3,7 +3,7 @@ import requests
 def finalizar_cambao(classe):
     
     """
-    Envia uma requisição POST para finalizar o cambão.
+        Envia uma requisição POST para finalizar o cambão.
     """
 
     url = 'https://apontamentousinagem.onrender.com/pintura/api/finalizar-cambao/'

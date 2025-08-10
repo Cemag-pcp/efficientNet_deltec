@@ -1,51 +1,65 @@
+# libs básicas
 import os
 import cv2
 import csv
-import torch
 import time
 from pathlib import Path
+from datetime import datetime, timedelta
 
+# libs importantes pro modelo
+import torch
 from ultralytics import YOLO
 from torchvision import transforms, models
-from PIL import Image
-from datetime import datetime, timedelta
 from collections import deque
+from PIL import Image
+
+# libs de apontamento (API do CEMAGPROD)
 from api_apontamento import finalizar_cambao
      
-# base do projeto (onde está este script)
+# base do proj
 BASE_DIR = Path(__file__).parent
 
-# monta caminho relativo até o best.pt
+# caminho independente do pc
+# caminho dos pesos do modelo YOLO
 YOLO_WEIGHTS = BASE_DIR / 'results' / 'placa_detector' / 'weights' / 'best.pt'
 
-# — CONFIGURAÇÕES —
-YOLO_WEIGHTS = str(YOLO_WEIGHTS)
-EFF_WEIGHTS  = 'eff3vs8.pth'
-DEVICE       = 'cuda' if torch.cuda.is_available() else 'cpu'
-IMG_SIZE     = 640
-CONF_THRESH  = 0.75
-CLF_THRESH  = 0.75
 
-# URL da sua câmera IP (RTSP)
-# VIDEO_PATH = 'rtsp://admin:cem@2022@192.168.3.208:554/cam/realmonitor?channel=1&subtype=0'
-VIDEO_PATH = '5noite.mp4'
+# URL da câmera IP (RTSP)
+VIDEO_PATH = 'rtsp://admin:cem@2022@192.168.3.208:554/cam/realmonitor?channel=1&subtype=0'
 
+# Apenas para testes
+# VIDEO_PATH = '1.mp4'
+
+# Já que as classes são números de 1 a 8, foi feito uma lista que traz o range de 1 a 8
 num_classes = 8
 classes = [str(i) for i in range(1, 9)]
 
-# Região permitida
+# Região de interesse para o modelo (evita mostrar o frame inteiro)
 ROI_X1, ROI_Y1 = 600, 250
 ROI_X2, ROI_Y2 = 900, 400
 
+# Configuração de cooldown
+# Serve para não alertar mais de uma vez o mesmo número de forma sequenciada
+# Exemplo: Alertou o número 4 (entra o cooldown de no mínimo 30 min para o próximo número 4)
 ALERT_COOLDOWN = timedelta(minutes=30)
+
+# Log para alertas (apenas para guardar a hora que foi notificado a passagem daquela classe prevista)
 last_alert = {c: datetime.min for c in classes}
 ALERT_CSV = 'alerts.csv'
 
+# --- Configuração geral ---
+YOLO_WEIGHTS = str(YOLO_WEIGHTS) # caminho/identificador dos pesos do modelo YOLO.
+EFF_WEIGHTS  = 'eff3vs8.pth' # nome do arquivo de pesos do modelo EfficientNet
+DEVICE       = 'cuda' if torch.cuda.is_available() else 'cpu' # seleciona automaticamente GPU (CUDA) se disponível, senão CPU.
+IMG_SIZE     = 640 # tamanho da imagem de entrada para o modelo (em pixels) (quanto menor menos qualidade na imagem, isso é ruim para o modelo treinado com 640).
+CONF_THRESH  = 0.75 # valor mínimo de confiança para o modelo YOLO
+CLF_THRESH  = 0.75 # valor mínimo de confiança para o modelo efficientNet
+
 # --- Parâmetros de suavização ---
-FRAME_THRESHOLD = 3      # mesmo dígito em 3 frames seguidos
-recent_preds    = deque(maxlen=FRAME_THRESHOLD)
-stable_digit    = None
-last_alert_time = datetime.min
+FRAME_THRESHOLD = 3      # mesmo dígito em 3 frames seguidos (apenas se bater 75% de confiança em 3 frames consecutivos (confirmará a classe))
+recent_preds    = deque(maxlen=FRAME_THRESHOLD) # fila circular que armazena as últimas predições (até o limite definido por FRAME_THRESHOLD).
+stable_digit    = None # último dígito confirmado como estável.
+last_alert_time = datetime.min # registro de quando o último alerta foi emitido (inicializado no menor valor possível de datetime).
 # ----------------------------------
 
 # Caminho do CSV de alertas
@@ -54,34 +68,42 @@ if not os.path.exists(ALERT_CSV):
         csv.writer(f).writerow(['timestamp','digit','yolo_conf','clf_conf'])
 
 # Carrega modelos
+# YOLO
 yolo = YOLO(YOLO_WEIGHTS)
+
+# EfficientNet
 clf = models.efficientnet_b0(pretrained=False)
 clf.classifier[1] = torch.nn.Linear(clf.classifier[1].in_features, num_classes)
 clf.load_state_dict(torch.load(EFF_WEIGHTS, map_location=DEVICE))
 clf.to(DEVICE).eval()
 
+# Pipeline de transformação das imagens antes de passar pelo modelo classificador
 tfm = transforms.Compose([
-    transforms.Resize((224,224)),
-    transforms.ToTensor(),
-    transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225]),
+    transforms.Resize((224,224)), # redimensiona para 224x224px (padrão do effNet)
+    transforms.ToTensor(), # converte a imagem para tensor (PyTorch) normalizado entre 0 e 1. 
+    transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225]), # aplica normalização de cada canal (R, G, B) usando médias e desvios padrão do ImageNet.
 ])
 
 def conectar_camera(url, tentativas=100, delay=5):
-    """ Tenta abrir o stream RTSP várias vezes antes de desistir. """
+    """
+    Tenta abrir o stream RTSP várias vezes antes de desistir.
+    Isso ajuda caso perca a conexão (tendo em vista que a conexão da CEMAG não é tão estável)
+
+    """
     for i in range(tentativas):
         print(f"?? Tentando conectar à câmera (tentativa {i+1}/{tentativas})...")
         cap = cv2.VideoCapture(url)
         time.sleep(2)
         if cap.isOpened():
-            print("? Conectado à câmera.")
+            print("Conectado à câmera.")
             return cap
-        print(f"? Falha na conexão. Re-tentando em {delay}s...")
+        print(f"Falha na conexão. Re-tentando em {delay}s...")
         cap.release()
         time.sleep(delay)
-    print("?? Não foi possível conectar à câmera.")
+    print("Não foi possível conectar à câmera.")
     return None
 
-def realtime_infer():
+def realtime_infer(camera_tempo_real):
     global stable_digit, last_alert_time
 
     cap = conectar_camera(VIDEO_PATH)
@@ -89,7 +111,7 @@ def realtime_infer():
         print("Não foi possível conectar à câmera.")
         return
 
-    # 1) Cria a janela antes do loop
+    # Cria a janela antes do loop
     window = 'Detecções'
     # cv2.namedWindow(window, cv2.WINDOW_NORMAL)
 
@@ -126,7 +148,7 @@ def realtime_infer():
         boxes     = results.boxes.xyxy.cpu().numpy()
         yolo_confs= results.boxes.conf.cpu().numpy()
 
-        # 1) Desenha o ROI definido
+        # Desenha o ROI definido
         cv2.rectangle(
             frame,
             (ROI_X1, ROI_Y1),
@@ -153,21 +175,21 @@ def realtime_infer():
                 clf_conf = torch.softmax(logits,1)[0,pred].item()
 
             pred_digit = classes[pred]
-            # 1) acumula no deque
+            # acumula no deque
             recent_preds.append(pred_digit)
 
-            # 2) verifica se o deque encheu e todos são iguais
+            # verifica se o deque encheu e todos são iguais
             if len(recent_preds)==FRAME_THRESHOLD and len(set(recent_preds))==1:
                 candidate = recent_preds[0]
             else:
                 candidate = None
 
-            # 3) só dispara quando mudar para um novo dígito estável
+            # só dispara quando mudar para um novo dígito estável
             now = datetime.now()
             if candidate and candidate != stable_digit:
-                # 3.1) Filtra pelas confianças
+                # Filtra pelas confianças
                 if yolo_conf >= CONF_THRESH and clf_conf >= CLF_THRESH:
-                    # 3.2) Verifica o cooldown
+                    # Verifica o cooldown
                     if now - last_alert_time >= ALERT_COOLDOWN:
                         stable_digit    = candidate
                         last_alert_time = now
@@ -196,8 +218,10 @@ def realtime_infer():
                             (x1,y1-10), cv2.FONT_HERSHEY_SIMPLEX,
                             1,(0,255,0),2)
         
-        # 2) Exibe o frame inteiro **depois** de desenhar todas as deteções
-        cv2.imshow(window, frame)
+        # Exibe o frame inteiro **depois** de desenhar todas as deteções
+        # Perguntar ao usuario se quer ou não visulizar em tempo real a imagem da câmera (apenas para validações)
+        if video_tempo_real.strip().lower() == 'y':
+            cv2.imshow(window, frame)
         
         # exibe (ou salta se não quiser janela)
         if cv2.waitKey(1)&0xFF==ord('q'):
@@ -207,4 +231,10 @@ def realtime_infer():
     cv2.destroyAllWindows()
 
 if __name__ == '__main__':
-    realtime_infer()
+    while True:
+        video_tempo_real = input("Visualizar em tempo real a imagem da câmera? (Y/N): ").strip().lower()
+        if video_tempo_real in ('y', 'n'):
+            break
+        print("Digite apenas Y ou N.")
+    
+    realtime_infer(video_tempo_real)
