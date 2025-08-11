@@ -24,10 +24,10 @@ BASE_DIR = Path(__file__).parent
 YOLO_WEIGHTS = BASE_DIR / 'results' / 'placa_detector' / 'weights' / 'best.pt'
 
 # URL da câmera IP (RTSP)
-VIDEO_PATH = 'rtsp://admin:cem@2022@192.168.3.208:554/cam/realmonitor?channel=1&subtype=0'
+# VIDEO_PATH = 'rtsp://admin:cem@2022@192.168.3.208:554/cam/realmonitor?channel=1&subtype=0'
 
 # Apenas para testes
-# VIDEO_PATH = '1.mp4'
+VIDEO_PATH = r'C:\Users\pcp2\efficientNet_deltec\efficientNet_deltec\videos\dia\1\1.mp4'
 
 # Já que as classes são números de 1 a 8, foi feito uma lista que traz o range de 1 a 8
 num_classes = 8
@@ -102,7 +102,7 @@ def conectar_camera(url, tentativas=100, delay=5):
     print("Não foi possível conectar à câmera.")
     return None
 
-def realtime_infer(camera_tempo_real):
+def realtime_infer():
     global stable_digit, last_alert_time
 
     cap = conectar_camera(VIDEO_PATH)
@@ -185,27 +185,25 @@ def realtime_infer(camera_tempo_real):
 
             # só dispara quando mudar para um novo dígito estável
             now = datetime.now()
-            if candidate and candidate != stable_digit:
-                # Filtra pelas confianças
-                if yolo_conf >= CONF_THRESH and clf_conf >= CLF_THRESH:
-                    # Verifica o cooldown
-                    if now - last_alert_time >= ALERT_COOLDOWN:
-                        stable_digit    = candidate
-                        last_alert_time = now
+            if candidate and yolo_conf >= CONF_THRESH and clf_conf >= CLF_THRESH:
+                # usa cooldown por número (last_alert[candidate])
+                if now - last_alert.get(candidate, datetime.min) >= ALERT_COOLDOWN:
+                    stable_digit = candidate
+                    last_alert[candidate] = now  # atualiza só o dígito atual
 
-                        # registra CSV e chama API
-                        with open(ALERT_CSV, 'a', newline='') as f:
-                            csv.writer(f).writerow([
-                                now.strftime('%Y-%m-%d %H:%M:%S'),
-                                stable_digit,
-                                f'{yolo_conf:.4f}',
-                                f'{clf_conf:.4f}'
-                            ])
-                        print(f"✅ Alerta: dígito {stable_digit} | "
-                            f"YOLO {yolo_conf:.0%}, clf {clf_conf:.0%} em {now:%H:%M:%S}")
+                    # registra CSV e chama API
+                    with open(ALERT_CSV, 'a', newline='') as f:
+                        csv.writer(f).writerow([
+                            now.strftime('%Y-%m-%d %H:%M:%S'),
+                            stable_digit,
+                            f'{yolo_conf:.4f}',
+                            f'{clf_conf:.4f}'
+                        ])
+                    print(f"✅ Alerta: dígito {stable_digit} | "
+                        f"YOLO {yolo_conf:.0%}, clf {clf_conf:.0%} em {now:%H:%M:%S}")
 
-                        # chama API
-                        # finalizar_cambao(stable_digit)
+                    # chama API
+                    # finalizar_cambao(stable_digit)
             
             # cv2.imshow('Detecções', frame)
 
