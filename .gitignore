@@ -10,3 +10,6 @@
 alerts.csv
 /alerts.csv
 alerts
+criar_train_val.py
+efficientNet.py
+main.py

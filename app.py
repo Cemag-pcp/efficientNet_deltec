@@ -23,7 +23,6 @@ BASE_DIR = Path(__file__).parent
 # caminho dos pesos do modelo YOLO
 YOLO_WEIGHTS = BASE_DIR / 'results' / 'placa_detector' / 'weights' / 'best.pt'
 
-
 # URL da câmera IP (RTSP)
 VIDEO_PATH = 'rtsp://admin:cem@2022@192.168.3.208:554/cam/realmonitor?channel=1&subtype=0'
 
